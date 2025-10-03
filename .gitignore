@@ -1,0 +1,5 @@
+results/
+data/mmseqs/
+data/tmp/
+model/kappel-lab-condensate-pred/
+model/tmp/
