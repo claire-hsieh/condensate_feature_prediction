@@ -938,8 +938,7 @@ random_split = False   # randomly split parents and assign children into the sam
 ### RUN MODELS ###
 ##################
 
-
-if balanced_split:
+if feature_config.balanced_split:
     ### Balanced Train Test Split -- Elena ###
     balanced_splits = pd.read_csv("/Users/clairehsieh/Library/CloudStorage/OneDrive-Personal/Documents/UCLA/rotations/kalli_kappel/model/kappel-lab-condensate-pred/simple_models/train_test_val_split_evaluation/9_19_25_base_split/codenSeq_data_with_base_split.csv")
     balanced_splits = balanced_splits.dropna(subset=[label])
@@ -1014,7 +1013,7 @@ if balanced_split:
 
         train_with_predefined_splits(model_input, config)
 
-if group_clusters_split:
+if feature_config.group_clusters_split:
     ## GROUPED BY CLUSTERS ###
 
     # Read in Train Test Split with Parent Child groups #
@@ -1148,7 +1147,7 @@ if group_clusters_split:
 
         model, logs, fold_outputs, losses = train(x, y, config, groups=group)
 
-if random_split:
+if feature_config.random_split:
     ### Split parents randomly and assign children into the same groups ###
     # logo for folds
     dfs = [pd.read_csv(f"/Users/clairehsieh/Library/CloudStorage/OneDrive-Personal/Documents/UCLA/rotations/kalli_kappel/data/poolB_12ntBC_sublibrary{i}.csv") for i in range(1, 4)]

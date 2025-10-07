@@ -16,7 +16,7 @@ from esm import FastaBatchedDataset, pretrained
 # esm2_t6_8M_UR50D	    6	8M
 
 # from kaggle: https://www.kaggle.com/code/viktorfairuschin/extracting-esm-2-embeddings-from-fasta-files
-def extract_embeddings(model_name, fasta_file, output_dir, tokens_per_batch=4096, seq_length=1022,repr_layers=[33]):
+def extract_embeddings(model_name, fasta_file, output_dir, tokens_per_batch=4096, seq_length=66,repr_layers=[6]):
     
     model, alphabet = pretrained.load_model_and_alphabet(model_name)
     model.eval()
