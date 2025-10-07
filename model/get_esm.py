@@ -1,5 +1,6 @@
 import pathlib
 import torch
+import os
 
 from esm import FastaBatchedDataset, pretrained
 
@@ -16,7 +17,7 @@ from esm import FastaBatchedDataset, pretrained
 # esm2_t6_8M_UR50D	    6	8M
 
 # from kaggle: https://www.kaggle.com/code/viktorfairuschin/extracting-esm-2-embeddings-from-fasta-files
-def extract_embeddings(model_name, fasta_file, output_dir, tokens_per_batch=4096, seq_length=66,repr_layers=[6]):
+def extract_embeddings(model_name, fasta_file, output_dir, tokens_per_batch=4096, seq_length=66,repr_layers=[5]):
     
     model, alphabet = pretrained.load_model_and_alphabet(model_name)
     model.eval()
@@ -63,8 +64,15 @@ def extract_embeddings(model_name, fasta_file, output_dir, tokens_per_batch=4096
                 torch.save(result, filename)
 
 model_name = 'esm2_t6_8M_UR50D'
-fasta_file = pathlib.Path('/u/project/kappel/chsieh/rotation/data/parent_seq.fasta')
-output_dir = pathlib.Path('/u/project/kappel/chsieh/rotation/data/esm2/parent/')
+
+
+input_file = '/u/project/kappel/chsieh/rotation/data/all_seqs.fasta'
+output_dir = '/u/project/kappel/chsieh/rotation/data/esm2/all/'
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+
+fasta_file = pathlib.Path(input_file)
+output_dir = pathlib.Path(output_dir)
 
 extract_embeddings(model_name, fasta_file, output_dir)
 

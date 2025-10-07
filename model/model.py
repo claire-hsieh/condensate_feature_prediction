@@ -182,6 +182,36 @@ class Config:
     def __repr__(self):
         return self.__str__()
 
+class Feature_Config:
+    def __init__(
+        self,
+        one_hot_input=False,
+        kmer_table_input=False,
+        seq_features_input=False,
+        label="medium_GFP_fraction_cells_with_condensates",
+        balanced_split=False,
+        group_clusters_split=False,
+        random_split=False,
+    ):
+        # Input options
+        self.one_hot_input = one_hot_input
+        self.kmer_table_input = kmer_table_input
+        self.seq_features_input = seq_features_input
+
+        # Predicted value
+        self.label = label
+
+        # Data split options
+        self.balanced_split = balanced_split
+        self.group_clusters_split = group_clusters_split
+        self.random_split = random_split
+
+    def __str__(self):
+        return '\n'.join(f'{k}: {v}' for k, v in vars(self).items())
+
+    def __repr__(self):
+        return self.__str__()
+
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -797,87 +827,79 @@ def train_with_predefined_splits(model_input, config):
     val_dataset   = CondensateDataset(model_input["val"]["x"], model_input["val"]["y"])
     test_dataset  = CondensateDataset(model_input["test"]["x"],model_input["test"]["y"])
 
-    # K-fold on training dataset
-    kf = KFold(n_splits=5, shuffle=True, random_state=42)
-
-    for fold, (train_idx, val_idx) in enumerate(kf.split(range(len(train_dataset)))):
-        print(f"Fold {fold+1}")
-        train_dataloader = DataLoader(Subset(train_dataset, train_idx), batch_size=config.batch_size, shuffle=True)
-        val_dataloader = DataLoader(Subset(train_dataset, val_idx), batch_size=config.batch_size, shuffle=False)
+    train_dataloader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False)
 
 
-        model = MLP(config)
-        epoch_train_losses = []
-        epoch_val_losses = []
-        val_labels = []
-        # for fold in range(num_folds):
-        filename = fold
-        optimizer = optim.Adam(model.parameters(), lr=config.lr)
-        if config.early_stopping:
-            early_stopping =  EarlyStopping(patience=config.patience, delta=config.delta)
-        log_memory_usage()
+    model = MLP(config)
+    epoch_train_losses = []
+    epoch_val_losses = []
+    val_labels = []
+    optimizer = optim.Adam(model.parameters(), lr=config.lr)
+    if config.early_stopping:
+        early_stopping =  EarlyStopping(patience=config.patience, delta=config.delta)
+    log_memory_usage()
 
-        for epoch in tqdm(range(config.max_epochs)):
-            model.train()
-            train_losses = []
-            val_losses = []
-            for batch in train_dataloader:
+    for epoch in tqdm(range(config.max_epochs)):
+        model.train()
+        train_losses = []
+        val_losses = []
+        for batch in train_dataloader:
+            x, y = batch
+            x = x.to(config.device)
+            y = y.to(config.device)
+            optimizer.zero_grad()
+            device = next(model.parameters()).device  
+            output = model(x)
+            if config.criterion == "regression":       loss = loss_fn(output.float(), y.float())
+            elif config.criterion == "classification": loss = loss_fn(output.view(-1), y.float().view(-1))
+
+            train_losses.append(loss.item())
+            loss.backward()
+            optimizer.step()
+        model.eval()
+        with torch.no_grad():
+            for batch in val_dataloader:
                 x, y = batch
                 x = x.to(config.device)
                 y = y.to(config.device)
-                optimizer.zero_grad()
-                device = next(model.parameters()).device  
                 output = model(x)
-                if config.criterion == "regression":       loss = loss_fn(output.float(), y.float())
-                elif config.criterion == "classification": loss = loss_fn(output.view(-1), y.float().view(-1))
+                loss = loss_fn(output.float(), y.float())                
+                val_losses.append(loss.item())
+            epoch_train_losses.append(mean(train_losses))
+            epoch_val_losses.append(mean(val_losses))
+            if config.early_stopping:
+                early_stopping(mean(val_losses), model)
+                if early_stopping.early_stop:
+                    print(f"Early stopping at epoch {epoch}")
+                    early_stopping.load_best_model(model)
+                    break
+    
+    logs["all_val_labels"].append(val_labels)
+    logs["fold_train_losses"].append(epoch_train_losses)
+    logs["fold_val_losses"].append(epoch_val_losses)
+    train_actual, train_pred = get_predictions(model, train_dataloader, config)
+    val_actual, val_pred = get_predictions(model, val_dataloader, config)
+    logs["fold_actuals"].append(val_actual)
+    logs["fold_preds"].append(val_pred)
+    logs["fold_train_actuals"].append(train_actual)
+    logs["fold_train_preds"].append(train_pred)
+    if config.criterion == "regression": 
+        correlations = {
+            "train_spearman": compute_spearman_correlation(train_actual, train_pred) or 0,
+            "val_spearman": compute_spearman_correlation(val_actual, val_pred) or 0,
+            "train_pearson": compute_pearson_correlation(train_actual, train_pred) or 0,
+            "val_pearson": compute_pearson_correlation(val_actual, val_pred) or 0
+        }
+        all_correlations.append(correlations)
+        logs["all_correlation"].append(correlations)
+    # plot_epoch_losses(epoch_train_losses, epoch_val_losses, filename, output_dir)
+    # plot_fold_scatter(val_actual, val_pred, train_actual, train_pred, correlations, fold, output_dir)        
 
-                train_losses.append(loss.item())
-                loss.backward()
-                optimizer.step()
-            model.eval()
-            with torch.no_grad():
-                for batch in val_dataloader:
-                    x, y = batch
-                    x = x.to(config.device)
-                    y = y.to(config.device)
-                    output = model(x)
-                    loss = loss_fn(output.float(), y.float())                
-                    val_losses.append(loss.item())
-                epoch_train_losses.append(mean(train_losses))
-                epoch_val_losses.append(mean(val_losses))
-                if config.early_stopping:
-                    early_stopping(mean(val_losses), model)
-                    if early_stopping.early_stop:
-                        print(f"Early stopping at epoch {epoch}")
-                        early_stopping.load_best_model(model)
-                        break
-        
-        logs["all_val_labels"].append(val_labels)
-        logs["fold_train_losses"].append(epoch_train_losses)
-        logs["fold_val_losses"].append(epoch_val_losses)
-        train_actual, train_pred = get_predictions(model, train_dataloader, config)
-        val_actual, val_pred = get_predictions(model, val_dataloader, config)
-        logs["fold_actuals"].append(val_actual)
-        logs["fold_preds"].append(val_pred)
-        logs["fold_train_actuals"].append(train_actual)
-        logs["fold_train_preds"].append(train_pred)
-        if config.criterion == "regression": 
-            correlations = {
-                "train_spearman": compute_spearman_correlation(train_actual, train_pred) or 0,
-                "val_spearman": compute_spearman_correlation(val_actual, val_pred) or 0,
-                "train_pearson": compute_pearson_correlation(train_actual, train_pred) or 0,
-                "val_pearson": compute_pearson_correlation(val_actual, val_pred) or 0
-            }
-            all_correlations.append(correlations)
-            logs["all_correlation"].append(correlations)
-        # plot_epoch_losses(epoch_train_losses, epoch_val_losses, filename, output_dir)
-        # plot_fold_scatter(val_actual, val_pred, train_actual, train_pred, correlations, fold, output_dir)        
-
-        losses["train_losses"].append(epoch_train_losses), losses["val_losses"].append(epoch_val_losses)
-        fold_outputs["fold_train_actual"].append(train_actual), fold_outputs["fold_train_pred"].append(train_pred), fold_outputs["fold_val_actual"].append(val_actual), fold_outputs["fold_val_pred"].append(val_pred), 
-        log_memory_usage()
-        if config.save_model: torch.save(model.state_dict(), os.path.join(model_output_dir, f"model_fold_{fold}.pth"))
-        # plot_correlations(logs["all_correlation"], output_dir)
+    losses["train_losses"].append(epoch_train_losses), losses["val_losses"].append(epoch_val_losses)
+    fold_outputs["fold_train_actual"].append(train_actual), fold_outputs["fold_train_pred"].append(train_pred), fold_outputs["fold_val_actual"].append(val_actual), fold_outputs["fold_val_pred"].append(val_pred), 
+    log_memory_usage()
+    if config.save_model: torch.save(model.state_dict(), os.path.join(model_output_dir, f"model_fold_{fold}.pth"))
 
     # Test set
     print("Evaluating test set")
@@ -920,18 +942,8 @@ def train_with_predefined_splits(model_input, config):
 ############### 
 
 # model input
-one_hot_input = True
-kmer_table_input = False
-seq_features_input = False
-
-# predicted value
-label = "medium_GFP_fraction_cells_with_condensates"
-
-# data split
-balanced_split = True
-group_clusters_split = False # split uses group kfold on mmseq similarity clusters
-random_split = False   # randomly split parents and assign children into the same groups
-
+feature_config = Feature_Config(kmer_table_input=True, seq_features_input=True, balanced_split=True)
+print(feature_config)
 
 
 ##################
@@ -941,16 +953,16 @@ random_split = False   # randomly split parents and assign children into the sam
 if feature_config.balanced_split:
     ### Balanced Train Test Split -- Elena ###
     balanced_splits = pd.read_csv("/Users/clairehsieh/Library/CloudStorage/OneDrive-Personal/Documents/UCLA/rotations/kalli_kappel/model/kappel-lab-condensate-pred/simple_models/train_test_val_split_evaluation/9_19_25_base_split/codenSeq_data_with_base_split.csv")
-    balanced_splits = balanced_splits.dropna(subset=[label])
+    balanced_splits = balanced_splits.dropna(subset=[feature_config.label])
 
     train = balanced_splits.loc[balanced_splits["base_split"] == "train"]
     test = balanced_splits.loc[balanced_splits["base_split"] == "test"]
     val = balanced_splits.loc[balanced_splits["base_split"] == "val"]
 
 
-    if one_hot_input:
+    if feature_config.one_hot_input:        
         ## Run Classification Model on One Hot Encoded Seq
-        config = Config(output_dir = "/Users/clairehsieh/OneDrive/Documents/UCLA/rotations/kalli_kappel/results/logo/classification/balanced_split/",
+        config = Config(output_dir = "/Users/clairehsieh/OneDrive/Documents/UCLA/rotations/kalli_kappel/results/logo/classification/balanced_split/one_hot/",
                         batch_size=100, input_dim=1320, output_dim=1, criterion="classification")
         print(config)
         model_input = {"train":{'x':0, 'y':0}, 
@@ -959,11 +971,11 @@ if feature_config.balanced_split:
         for k, df in zip(model_input.keys(), [train, test, val]):
             model_input[k]['x'] = np.array([one_hot_encode(row['protein_seq']) for i,row in df.iterrows()])
             model_input[k]['x'] = torch.tensor(model_input[k]['x'].reshape(model_input[k]['x'].shape[0], -1), dtype=torch.float32).to(config.device)
-            model_input[k]['y'] = (torch.tensor(np.array([row[label] for i, row in df.iterrows()]), dtype=torch.float32) >= 0.3).int().to(config.device)
+            model_input[k]['y'] = (torch.tensor(np.array([row[feature_config.label] for i, row in df.iterrows()]), dtype=torch.float32) >= 0.3).int().to(config.device)
 
         train_with_predefined_splits(model_input, config)
 
-    if kmer_table_input:
+    if feature_config.kmer_table_input:
         ### Run Classification Model on Kmer Tables ###
         config = Config(output_dir = "/Users/clairehsieh/OneDrive/Documents/UCLA/rotations/kalli_kappel/results/logo/classification/balanced_split/kmer/",
                         batch_size=100, input_dim=7696, output_dim=1, train_split="logo", criterion="classification")
@@ -973,13 +985,13 @@ if feature_config.balanced_split:
                     "test":{'x':0, 'y':0}, 
                     "val":{'x':0, 'y':0}}
         for k, df, n in zip(model_input.keys(), [train, test, val], ["train", "test", "val"]):
-            model_input[k]['y'] = (torch.tensor(np.array([row[label] for i, row in df.iterrows()]), dtype=torch.float32) >= 0.3).int().to(config.device)
+            model_input[k]['y'] = (torch.tensor(np.array([row[feature_config.label] for i, row in df.iterrows()]), dtype=torch.float32) >= 0.3).int().to(config.device)
             model_input[k]['x'] = torch.tensor(kmer_matrix[balanced_splits["base_split"] == n], dtype=torch.float32).to(config.device)
 
         # 6409 sequences, 7696 unique kmers with k = 3
         train_with_predefined_splits(model_input, config)
 
-    if seq_features_input:
+    if feature_config.seq_features_input:
         ## Run Classification Model on Sequence Features ###
         config = Config(output_dir = "/Users/clairehsieh/OneDrive/Documents/UCLA/rotations/kalli_kappel/results/logo/classification/balanced_split/seq_features_aa_only/",
                         batch_size=100, input_dim=20, output_dim=1, criterion="classification")
@@ -1008,7 +1020,7 @@ if feature_config.balanced_split:
                     "test":{'x':0, 'y':0}, 
                     "val":{'x':0, 'y':0}}
         for k, df, n in zip(model_input.keys(), [train, test, val], ["train", "test", "val"]):
-            model_input[k]['y'] = (torch.tensor(np.array([row[label] for i, row in df.iterrows()]), dtype=torch.float32) >= 0.3).int().to(config.device)
+            model_input[k]['y'] = (torch.tensor(np.array([row[feature_config.label] for i, row in df.iterrows()]), dtype=torch.float32) >= 0.3).int().to(config.device)
             model_input[k]['x'] = torch.tensor(df[sequence_feature_cols].values, dtype=torch.float32).to(config.device)
 
         train_with_predefined_splits(model_input, config)
@@ -1017,23 +1029,23 @@ if feature_config.group_clusters_split:
     ## GROUPED BY CLUSTERS ###
 
     # Read in Train Test Split with Parent Child groups #
-    # format: dict with protein_seq as id - match to group, label, x (features, one hot, or kmer table)
+    # format: dict with protein_seq as id - match to group, feature_config.label, x (features, one hot, or kmer table)
 
     clusters = pd.read_csv('/Users/clairehsieh/Library/CloudStorage/OneDrive-Personal/Documents/UCLA/rotations/kalli_kappel/data/parent_child_clusters.csv')
     cluster_ids = [int(k) for k, v in Counter(clusters["cluster_id"].values).items() if v > 2]
     clusters = clusters[clusters['cluster_id'].isin(cluster_ids)]
 
-    if one_hot_input:
+    if feature_config.one_hot_input:
         model_input = {row["protein_seq"] : {"group":0, 
                                             "x":one_hot_encode(row["protein_seq"]), 
-                                            "y":row[label]} for i,row in large_pl_data.dropna(subset=[label]).iterrows()}
-    elif kmer_table_input:     
-        kmer_matrix, unique_kmers = kmer_table(large_pl_data.dropna(subset=[label])["protein_seq"])
-        tmp = {k:v for k,v in zip(large_pl_data.dropna(subset=[label])["protein_seq"], kmer_matrix)}
+                                            "y":row[feature_config.label]} for i,row in large_pl_data.dropna(subset=[feature_config.label]).iterrows()}
+    if feature_config.kmer_table_input:     
+        kmer_matrix, unique_kmers = kmer_table(large_pl_data.dropna(subset=[feature_config.label])["protein_seq"])
+        tmp = {k:v for k,v in zip(large_pl_data.dropna(subset=[feature_config.label])["protein_seq"], kmer_matrix)}
         model_input = {row["protein_seq"] : {"group":0, 
                                                 "x" : tmp[row["protein_seq"]],
-                                                "y " :row[label]} for i,row in large_pl_data.dropna(subset=[label]).iterrows()}
-    elif seq_features_input: 
+                                                "y " :row[feature_config.label]} for i,row in large_pl_data.dropna(subset=[feature_config.label]).iterrows()}
+    if feature_config.seq_features_input: 
         sequence_feature_cols = ['fraction_A',
             'fraction_C',
             'fraction_D',
@@ -1125,17 +1137,17 @@ if feature_config.group_clusters_split:
             'fraction_group_ILV',
             'fraction_FYW_of_FYWILV',
             'fraction_FYW_of_FYWR']
-        sequence_features = large_pl_data[["protein_seq", label] + sequence_feature_cols]
-        sequence_features = sequence_features.set_index('protein_seq').loc[large_pl_data.dropna(subset=[label])["protein_seq"]].reset_index()
+        sequence_features = large_pl_data[["protein_seq", feature_config.label] + sequence_feature_cols]
+        sequence_features = sequence_features.set_index('protein_seq').loc[large_pl_data.dropna(subset=[feature_config.label])["protein_seq"]].reset_index()
         model_input = {row["protein_seq"] : {"group":0, 
-                                            "x" : sequence_features.loc[sequence_features["protein_seq"] == row['protein_seq']].drop(columns=["protein_seq", label]),
-                                            "y" : row[label] } for i,row in large_pl_data.dropna(subset=[label]).iterrows() }
+                                            "x" : sequence_features.loc[sequence_features["protein_seq"] == row['protein_seq']].drop(columns=["protein_seq", feature_config.label]),
+                                            "y" : row[feature_config.label] } for i,row in large_pl_data.dropna(subset=[feature_config.label]).iterrows() }
 
     for i, row in clusters.iterrows():
         try:        model_input[row["protein_seq"]]["group"] = row["cluster_id"]
         except:     pass
 
-    if one_hot_input:
+    if feature_config.one_hot_input:
         ### Run Classification Model on One Hot Encoded Seq
         config = Config(output_dir = "/Users/clairehsieh/OneDrive/Documents/UCLA/rotations/kalli_kappel/results/logo/classification/group_parent_children_split/",
                         batch_size=10, input_dim=1320, output_dim=1, train_split="group_kfold", criterion="classification")
@@ -1175,10 +1187,10 @@ if feature_config.random_split:
 
     # format into X, y, groups for logo split
     # groups should be group identity of each element in X (matched by index)
-    subset_data = large_pl_data.merge(parent_protein_seqs, on="protein_seq")[["protein_seq", label, "base_protein_seq"]]
+    subset_data = large_pl_data.merge(parent_protein_seqs, on="protein_seq")[["protein_seq", feature_config.label, "base_protein_seq"]]
     subset_data = subset_data.dropna(subset=[subset_data.columns[1]])
     seq_data = np.array([one_hot_encode(i) for i in subset_data["protein_seq"]])
-    labels = subset_data[label]
+    feature_config.labels = subset_data[feature_config.label]
     # 6409
 
     # reverse group_to_seq dictionary --> {parent_seq1: group, ... } and map group onto child sequences
@@ -1187,28 +1199,28 @@ if feature_config.random_split:
     subset_data = subset_data.dropna()
     groups_list = [seq_to_group[row["base_protein_seq"]] for ind, row in subset_data.iterrows()]
 
-    if one_hot_input:
+    if feature_config.one_hot_input:
         config = Config(output_dir = "/Users/clairehsieh/OneDrive/Documents/UCLA/rotations/kalli_kappel/results/logo/classification/random_split/",
                         batch_size=10, input_dim=1320, output_dim=1, train_split="logo", criterion="classification")
 
         seq_data = torch.tensor(seq_data.reshape(seq_data.shape[0], -1), dtype=torch.float32).to(config.device)
-        labels = (torch.tensor(labels, dtype=torch.float32) >= 0.5).int().to(config.device) # for classification
+        feature_config.labels = (torch.tensor(feature_config.labels, dtype=torch.float32) >= 0.5).int().to(config.device) # for classification
 
-        model, logs, fold_outputs, losses = train(seq_data, labels, config, groups=groups_list)
+        model, logs, fold_outputs, losses = train(seq_data, feature_config.labels, config, groups=groups_list)
 
 
-    if kmer_table_input:
+    if feature_config.kmer_table_input:
         seqs = subset_data["protein_seq"].values
         kmer_matrix, unique_kmers = kmer_table(seqs, k=3)
         # 6409 sequences, 7530 unique kmers with k = 3
         config = Config(output_dir = "/Users/clairehsieh/OneDrive/Documents/UCLA/rotations/kalli_kappel/results/logo/classification/random_split/kmer/",
                         batch_size=100, input_dim=7530, output_dim=1, train_split="logo", criterion="classification")
         kmer_matrix = torch.tensor(kmer_matrix, dtype=torch.float32).to(config.device)
-        labels = (torch.tensor(labels, dtype=torch.float32) >= 0.3).int().to(config.device) # for classification
-        model, logs, fold_outputs, losses = train(kmer_matrix, labels, config, groups=groups_list)
+        feature_config.labels = (torch.tensor(feature_config.labels, dtype=torch.float32) >= 0.3).int().to(config.device) # for classification
+        model, logs, fold_outputs, losses = train(kmer_matrix, feature_config.labels, config, groups=groups_list)
 
     
-    if seq_features_input:
+    if feature_config.seq_features_input:
         ## Run Classification Model on Sequence Features ###
         config = Config(output_dir = "/Users/clairehsieh/OneDrive/Documents/UCLA/rotations/kalli_kappel/results/logo/classification/random_split/seq_features_aa_only/",
                         batch_size=100, input_dim=20, output_dim=1, criterion="classification")
@@ -1235,5 +1247,5 @@ if feature_config.random_split:
             'fraction_Y']
 
         x = torch.tensor(subset_data[sequence_feature_cols].values, dtype=torch.float32).to(config.device)
-        labels = (torch.tensor(labels, dtype=torch.float32) >= 0.5).int().to(config.device) # for classification
-        model, logs, fold_outputs, losses = train(x, labels, config, groups=groups_list)
+        feature_config.labels = (torch.tensor(feature_config.labels, dtype=torch.float32) >= 0.5).int().to(config.device) # for classification
+        model, logs, fold_outputs, losses = train(x, feature_config.labels, config, groups=groups_list)

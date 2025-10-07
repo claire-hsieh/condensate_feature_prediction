@@ -9,11 +9,35 @@ scp chsieh@hoffman2.idre.ucla.edu:/u/project/kappel/chsieh/rotation/
 - run jobs
 	- `qsub -cwd -V -N J1 -l h_data=64M,h_rt=00:05:00 -M $USER -m bea /u/project/CCN/apps/examples/qsub/gather.sh`
 	- interactive
-		- qlogin -l h_data=4G,h_rt=2:00:00
+		- qlogin -l h_data=8G,h_rt=2:00:00
 - [[sample job script]]
 - to submit: `qsub job.sh`
-- check status: `qstat -u chsieh`
+
 - delete job: `qdel <jobID>`
+- check queue
+	- `qstat -u '*' | sort -k2nr`
+	- Shows all users’ jobs in your queues sorted by priority (descending).
+	- Jobs with higher priority than yours are “ahead” in scheduling.
+
+- check status: `qstat -u chsieh`
+	- status
+		- `E` = error
+		- `q` = queue
+		- `w` = waiting
+
+		- `Eqw` = failed job launch
+
+| Cause                     | Typical error message                        | Fix                                                                                        |
+| ------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Script path incorrect     | “cannot stat script file”                    | Check you `qsub`'d the correct file path                                                   |
+| Wrong interpreter         | “bad interpreter: No such file or directory” | Use full path in `#!/u/local/apps/anaconda3/2020.11/bin/python` or `#!/usr/bin/env python` |
+| Missing modules           | “command not found” or missing shared lib    | Load required modules inside the script (`module load anaconda3`)                          |
+| Permissions               | “permission denied”                          | `chmod +x script.sh`                                                                       |
+| Environment setup failing | often if `.bashrc` loads Anaconda by default | Add `#!/bin/bash -l` at top of script so login modules load properly                       |
+
+
+
+
 
 # Data
 - `sublibrary` = batch
