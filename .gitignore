@@ -2,13 +2,10 @@ results/
 data/mmseqs/
 data/tmp/
 data/esm/
+data/prottrans/
 model/kappel-lab-condensate-pred/
 model/tmp/
-
-
-
-
-
+model/protein-localization/
 
 
 

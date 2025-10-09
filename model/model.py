@@ -188,6 +188,8 @@ class Feature_Config:
         one_hot_input=False,
         kmer_table_input=False,
         seq_features_input=False,
+        esm_features_input=False,
+        prottrans_features_input = False,
         label="medium_GFP_fraction_cells_with_condensates",
         balanced_split=False,
         group_clusters_split=False,
@@ -197,6 +199,8 @@ class Feature_Config:
         self.one_hot_input = one_hot_input
         self.kmer_table_input = kmer_table_input
         self.seq_features_input = seq_features_input
+        self.esm_features_input = esm_features_input
+        self.prottrans_features_input = prottrans_features_input
 
         # Predicted value
         self.label = label
@@ -937,12 +941,34 @@ def train_with_predefined_splits(model_input, config):
 
     return model, logs, fold_outputs, losses
 
+
+# map protein seq, ids, esm_embeddings, labels, splits
+def read_fasta_to_dict(filepath):
+    fasta_dict = {}
+    with open(filepath, 'r') as f:
+        header = None
+        seq_chunks = []
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith('>'):
+                if header:
+                    fasta_dict[header] = ''.join(seq_chunks)
+                header = line[1:].split()[0]  # take header up to first space
+                seq_chunks = []
+            else:
+                seq_chunks.append(line)
+        if header:
+            fasta_dict[header] = ''.join(seq_chunks)
+    return fasta_dict
+
 ###############
 ### Options ###
 ############### 
 
 # model input
-feature_config = Feature_Config(kmer_table_input=True, seq_features_input=True, balanced_split=True)
+feature_config = Feature_Config(esm_features_input=True, balanced_split=True)
 print(feature_config)
 
 
@@ -1024,6 +1050,94 @@ if feature_config.balanced_split:
             model_input[k]['x'] = torch.tensor(df[sequence_feature_cols].values, dtype=torch.float32).to(config.device)
 
         train_with_predefined_splits(model_input, config)
+
+    if feature_config.esm_features_input:
+        config = Config(output_dir = "/Users/clairehsieh/OneDrive/Documents/UCLA/rotations/kalli_kappel/results/logo/classification/balanced_split/esm/",
+                        batch_size=100, input_dim=320, output_dim=1, criterion="classification")
+        print(config)
+        
+
+
+        child_esm_emb_dir = "/Users/clairehsieh/Library/CloudStorage/OneDrive-Personal/Documents/UCLA/rotations/kalli_kappel/data/esm/child/"
+        parent_esm_emb_dir = "/Users/clairehsieh/Library/CloudStorage/OneDrive-Personal/Documents/UCLA/rotations/kalli_kappel/data/esm/parent/"
+        parent_fasta_file = "/Users/clairehsieh/Library/CloudStorage/OneDrive-Personal/Documents/UCLA/rotations/kalli_kappel/data/parent_seqs.fasta"
+        child_fasta_file = "/Users/clairehsieh/Library/CloudStorage/OneDrive-Personal/Documents/UCLA/rotations/kalli_kappel/data/child_seqs.fasta"
+
+        parent_id_to_seq = read_fasta_to_dict(parent_fasta_file)
+        child_id_to_seq = read_fasta_to_dict(child_fasta_file)
+        child_id_to_embedding = {}
+        for file in os.listdir(child_esm_emb_dir):
+            child_id_to_embedding[file.split(".pt")[0]] = torch.load(f"{child_esm_emb_dir}/{file}")["mean_representations"][6] 
+        parent_id_to_embedding = {}
+        for file in os.listdir(parent_esm_emb_dir):
+            parent_id_to_embedding[file.split(".pt")[0]] = torch.load(f"{parent_esm_emb_dir}/{file}")["mean_representations"][6]
+    
+        dfs = [pd.read_csv(f"/Users/clairehsieh/Library/CloudStorage/OneDrive-Personal/Documents/UCLA/rotations/kalli_kappel/data/poolB_12ntBC_sublibrary{i}.csv") for i in range(1, 4)]
+        parent_protein_seqs = (
+            pd.concat([df[['base_protein_seq', 'protein_seq']] for df in dfs], ignore_index=True)
+            .dropna()
+        )
+        child_to_parent_seq = dict(zip(parent_protein_seqs['protein_seq'], parent_protein_seqs['base_protein_seq']))
+        parent_seq_to_id = {v:k for k,v in parent_id_to_seq.items()}
+
+        child_seq_to_esm_embedding =  {v:child_id_to_embedding[k] for k,v in child_id_to_seq.items()}
+        parent_seq_to_esm_embedding =  {v:parent_id_to_embedding[k] for k,v in parent_id_to_seq.items()}
+
+        model_input = {"train":{'x':0, 'y':0}, 
+                    "test":{'x':0, 'y':0}, 
+                    "val":{'x':0, 'y':0}}
+        for k, df in zip(model_input.keys(), [train, test, val]):
+            x = []
+            for i,row in df.iterrows():
+                try:            x.append(child_seq_to_esm_embedding[row['protein_seq']])
+                except:         print(row['protein_seq'])
+            model_input[k]['x'] = torch.tensor(np.array(x)).to(config.device)
+            model_input[k]['y'] = (torch.tensor(np.array([row[feature_config.label] for i, row in df.iterrows()]), dtype=torch.float32) >= 0.3).int().to(config.device)
+
+
+        train_with_predefined_splits(model_input, config)
+
+
+    if feature_config.prottrans_features_input:
+        prottrans_child_id_to_emb = {}
+        child_prottrans_dir = "/Users/clairehsieh/Library/CloudStorage/OneDrive-Personal/Documents/UCLA/rotations/kalli_kappel/data/prottrans/child/"
+        for file in os.listdir(child_prottrans_dir):
+            with open(child_prottrans_dir + file, "rb") as f:
+                data = torch.load(f)
+                prottrans_child_id_to_emb[data["entry_id"]] = data["embedding"]
+
+        
+        parent_fasta_file = "/Users/clairehsieh/Library/CloudStorage/OneDrive-Personal/Documents/UCLA/rotations/kalli_kappel/data/parent_seqs.fasta"
+        child_fasta_file = "/Users/clairehsieh/Library/CloudStorage/OneDrive-Personal/Documents/UCLA/rotations/kalli_kappel/data/child_seqs.fasta"
+
+        parent_id_to_seq = read_fasta_to_dict(parent_fasta_file)
+        child_id_to_seq = read_fasta_to_dict(child_fasta_file)
+        parent_id_to_embedding = {}
+        for file in os.listdir(parent_esm_emb_dir):
+            parent_id_to_embedding[file.split(".pt")[0]] = torch.load(f"{parent_esm_emb_dir}/{file}")["mean_representations"][6]
+    
+        dfs = [pd.read_csv(f"/Users/clairehsieh/Library/CloudStorage/OneDrive-Personal/Documents/UCLA/rotations/kalli_kappel/data/poolB_12ntBC_sublibrary{i}.csv") for i in range(1, 4)]
+        parent_protein_seqs = (
+            pd.concat([df[['base_protein_seq', 'protein_seq']] for df in dfs], ignore_index=True)
+            .dropna()
+        )
+        child_to_parent_seq = dict(zip(parent_protein_seqs['protein_seq'], parent_protein_seqs['base_protein_seq']))
+        parent_seq_to_id = {v:k for k,v in parent_id_to_seq.items()}
+
+        child_seq_to_esm_embedding =  {v:child_id_to_embedding[k] for k,v in child_id_to_seq.items()}
+        parent_seq_to_esm_embedding =  {v:parent_id_to_embedding[k] for k,v in parent_id_to_seq.items()}
+
+        model_input = {"train":{'x':0, 'y':0}, 
+                    "test":{'x':0, 'y':0}, 
+                    "val":{'x':0, 'y':0}}
+        for k, df in zip(model_input.keys(), [train, test, val]):
+            x = []
+            for i,row in df.iterrows():
+                try:            x.append(child_seq_to_esm_embedding[row['protein_seq']])
+                except:         print(row['protein_seq'])
+            model_input[k]['x'] = torch.tensor(np.array(x)).to(config.device)
+            model_input[k]['y'] = (torch.tensor(np.array([row[feature_config.label] for i, row in df.iterrows()]), dtype=torch.float32) >= 0.3).int().to(config.device)
+
 
 if feature_config.group_clusters_split:
     ## GROUPED BY CLUSTERS ###

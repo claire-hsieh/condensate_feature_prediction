@@ -4,6 +4,7 @@ FarewellHope93%
 scp chsieh@hoffman2.idre.ucla.edu:/u/project/kappel/chsieh/rotation/
 
 
+
 - https://www.hoffman2.idre.ucla.edu/Policies/Job-scheduling-policy.html
 - [interactive session](https://www.ccn.ucla.edu/wiki/index.php/Hoffman2:Interactive_Sessions): `qrsh`
 - run jobs
@@ -129,3 +130,7 @@ mmseqs convertalis ../data/mmseqs/parent_seq_1_DB ../data/mmseqs/parent_seq_1_DB
 
 ![[Pasted image 20251002211511.png|1000]]
 ![[Pasted image 20251002211520.png|2000]]![[Pasted image 20251002212301.png|550]]
+
+
+
+
